@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>توصيل</title>
+<style>
+  :root{--y:#ffc244;--g:#00a082}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,sans-serif;background:#f6f6f6;color:#222}
+  header{position:sticky;top:0;z-index:5;background:var(--y);display:flex;align-items:center;gap:8px;padding:10px 16px}
+  header h1{margin:0;font-size:20px;flex:1;cursor:pointer}
+  button{font:inherit;cursor:pointer;border:0;border-radius:8px;padding:8px 14px;background:#fff}
+  .p{background:var(--g);color:#fff}
+  main{max-width:900px;margin:0 auto;padding:16px}
+  .tabs{display:grid;grid-template-columns:repeat(auto-fit,minmax(105px,1fr));gap:8px;margin-bottom:16px}
+  .tabs button{padding:14px 6px;font-size:15px;box-shadow:0 1px 3px #0002}
+  .tabs .on{background:var(--g);color:#fff}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px}
+  .l{display:grid;gap:8px}
+  .card{background:#fff;border-radius:12px;padding:14px;box-shadow:0 1px 3px #0002}
+  .row{display:flex;align-items:center;justify-content:space-between;gap:8px}
+  input,textarea{width:100%;padding:10px;margin:4px 0;border:1px solid #ccc;border-radius:8px;font:inherit}
+  .st{display:flex;gap:4px;margin:8px 0}
+  .st i{flex:1;height:6px;border-radius:3px;background:#ddd}
+  .st i.d{background:var(--g)}
+  .muted{color:#777;font-size:13px}
+  #m{position:fixed;inset:0;background:#0007;display:none;align-items:center;justify-content:center;z-index:9}
+  #mb{background:#fff;border-radius:12px;padding:18px;width:min(92vw,360px)}
+</style>
+</head>
+<body>
+<header>
+  <h1 onclick="home()">🛵 توصيل</h1>
+  <button onclick="orders()">طلباتي</button>
+  <button onclick="cart()">🛒 <b id="cc">0</b></button>
+  <button id="ub" class="p" onclick="S.user?logout():authModal()">دخول</button>
+</header>
+<main id="v"></main>
+<div id="m"><div id="mb"></div></div>
+
+<script>
+const $=id=>document.getElementById(id),
+  esc=s=>String(s??'').replace(/[&<>"']/g,c=>'&#'+c.charCodeAt(0)+';'),
+  TABS=[['food','🍔 مطاعم'],['grocery','🛒 بقالة'],['pharmacy','💊 صيدلية'],['any','✨ أي شيء']],
+  ST=['pending','accepted','preparing','ready','picked_up','on_the_way','delivered'],
+  AR={pending:'بانتظار القبول',accepted:'تم القبول',preparing:'قيد التحضير',ready:'جاهز للتوصيل',
+      picked_up:'تم الاستلام',on_the_way:'في الطريق',delivered:'تم التوصيل',cancelled:'ملغي'},
+  FEE=10;
+let S={tab:'food',stores:[],items:{},cart:{sid:null,q:{}},timer:0,view:'',token:localStorage.t||null,user:null};
+try{S.user=JSON.parse(localStorage.u||'null')}catch{}
+
+addEventListener('unhandledrejection',e=>alert(e.reason?.message||'خطأ'));
+
+async function api(p,o={}){
+  const r=await fetch(p,{...o,headers:{'Content-Type':'application/json',...(S.token&&{Authorization:'Bearer '+S.token})}});
+  const d=await r.json().catch(()=>({}));
+  if(r.status===401&&S.token)logout();
+  if(!r.ok)throw new Error(d.error||'خطأ');
+  return d;
+}
+const view=n=>{clearInterval(S.timer);S.view=n},
+  ub=()=>$('ub').textContent=S.user?'خروج':'دخول',
+  badge=()=>$('cc').textContent=Object.values(S.cart.q).reduce((a,b)=>a+b,0),
+  bar=s=>s=='cancelled'?'':'<div class="st">'+ST.map((x,i)=>`<i class="${i<=ST.indexOf(s)?'d':''}"></i>`).join('')+'</div>';
+
+/* ---------- home() ---------- */
+async function home(){
+  view('home');
+  $('v').innerHTML=`<div class="tabs">${TABS.map(([k,l])=>`<button class="${k==S.tab?'on':''}" onclick="S.tab='${k}';home()">${l}</button>`).join('')}</div><div id="c"></div>`;
+  if(S.tab=='any')return $('c').innerHTML=`<div class="card"><h3>✨ اطلب أي شيء</h3>
+    <p class="muted">رسوم التوصيل ${FEE} MAD، وثمن المشتريات (إن وجد) يُدفع للسائق نقداً.</p>
+    <textarea id="ds" rows="3" placeholder="ماذا تريد؟ (مثال: طرد من مكتب البريد)"></textarea>
+    <input id="pk" placeholder="من أين نأخذه؟ (عنوان الاستلام)">
+    <input id="ad" placeholder="عنوان التوصيل" value="${esc(localStorage.ad)}">
+    <button class="p" onclick="order({description:$('ds').value,pickup_address:$('pk').value,delivery_address:$('ad').value})">إرسال الطلب</button></div>`;
+  S.stores=await api('/stores?category='+S.tab);
+  $('c').innerHTML=`<div class="grid">${S.stores.map(s=>`<div class="card" style="cursor:pointer" onclick="openStore('${s.id}')">
+    <b>${esc(s.name)}</b><div class="muted">${esc(s.address)}</div><div class="muted">${s.is_open?'🟢 مفتوح':'🔴 مغلق'}</div></div>`).join('')||'<p>لا توجد متاجر متاحة</p>'}</div>`;
+}
+
+/* ---------- المتجر + السلة ---------- */
+async function openStore(id){
+  view('store');
+  const s=S.stores.find(x=>x.id==id),ps=await api(`/stores/${id}/products`);
+  ps.forEach(p=>S.items[p.id]=p);
+  $('v').innerHTML=`<button onclick="home()">← رجوع</button><h2>${esc(s.name)}</h2><div class="grid">${ps.map(p=>`<div class="card">
+    <b>${esc(p.name)}</b><div class="muted">${esc(p.description||'')}</div>
+    <div class="row"><span>${(+p.price).toFixed(2)} MAD</span><span id="q${p.id}"></span></div></div>`).join('')||'<p>لا منتجات</p>'}</div>`;
+  ps.forEach(p=>qty(p.id));
+}
+const qty=id=>{const q=S.cart.q[id]||0,e=$('q'+id);
+  if(e)e.innerHTML=q?`<button onclick="chg('${id}',-1)">−</button> <b>${q}</b> <button onclick="chg('${id}',1)">+</button>`
+                    :`<button class="p" onclick="chg('${id}',1)">أضف</button>`};
+function chg(id,d){
+  const sid=S.items[id].store_id,c=S.cart;
+  if(c.sid&&c.sid!==sid&&Object.keys(c.q).length){if(!confirm('السلة تحتوي منتجات من متجر آخر. تفريغها؟'))return;c.q={}}
+  c.sid=sid;c.q[id]=Math.max(0,(c.q[id]||0)+d);if(!c.q[id])delete c.q[id];
+  S.view=='cart'?cart():Object.keys(S.items).forEach(qty);
+  badge();
+}
+function cart(){
+  view('cart');
+  const ids=Object.keys(S.cart.q),sub=ids.reduce((s,i)=>s+S.items[i].price*S.cart.q[i],0);
+  $('v').innerHTML=ids.length?`<h2>السلة</h2><div class="l">${ids.map(i=>`<div class="card row">
+    <span>${esc(S.items[i].name)}</span><span id="q${i}"></span><span>${(S.items[i].price*S.cart.q[i]).toFixed(2)}</span></div>`).join('')}</div>
+    <p>المجموع ${sub.toFixed(2)} + توصيل ${FEE} = <b>${(sub+FEE).toFixed(2)} MAD</b></p>
+    <input id="ad" placeholder="عنوان التوصيل" value="${esc(localStorage.ad)}">
+    <button class="p" onclick="order()">تأكيد الطلب (الدفع عند الاستلام)</button>`
+    :'<p>السلة فارغة</p>';
+  ids.forEach(qty);
+}
+
+/* ---------- Checkout + orders() ---------- */
+async function order(b){
+  if(!S.token)return authModal();
+  b=b||{store_id:S.cart.sid,items:Object.entries(S.cart.q).map(([product_id,qty])=>({product_id,qty})),delivery_address:$('ad').value};
+  await api('/orders',{method:'POST',body:JSON.stringify(b)});
+  localStorage.ad=b.delivery_address;
+  if(b.store_id)S.cart={sid:null,q:{}};
+  badge();alert('تم إرسال طلبك ✅');orders();
+}
+function orders(){
+  view('orders');
+  if(!S.token){$('v').innerHTML='<p>سجّل الدخول لعرض طلباتك</p>';return authModal()}
+  const draw=async()=>{
+    const os=await api('/orders/my');
+    $('v').innerHTML='<h2>طلباتي</h2><div class="l">'+(os.map(o=>`<div class="card">
+      <div class="row"><b>${esc(o.store)}</b><span>${(+o.total).toFixed(2)} MAD</span></div>
+      <div class="muted">${esc(AR[o.status]||o.status)}${o.courier?' • السائق: '+esc(o.courier):''}</div>${bar(o.status)}
+      ${o.status=='pending'?`<button onclick="cancel('${o.id}')">إلغاء الطلب</button>`:''}</div>`).join('')||'<p>لا طلبات بعد</p>')+'</div>';
+  };
+  draw();S.timer=setInterval(()=>draw().catch(()=>{}),8000);
+}
+async function cancel(id){
+  if(!confirm('إلغاء الطلب؟'))return;
+  await api(`/orders/${id}/status`,{method:'PATCH',body:JSON.stringify({status:'cancelled'})});
+  orders();
+}
+
+/* ---------- Auth ---------- */
+function authModal(reg){
+  $('mb').innerHTML=`<h3>${reg?'حساب جديد':'تسجيل الدخول'}</h3>
+    ${reg?'<input id="fn" placeholder="الاسم الكامل"><input id="ph" placeholder="رقم الهاتف">':''}
+    <input id="em" type="email" placeholder="البريد الإلكتروني">
+    <input id="pw" type="password" placeholder="كلمة المرور (8 أحرف على الأقل)">
+    <button class="p" style="width:100%" onclick="login(${!!reg})">${reg?'إنشاء الحساب':'دخول'}</button>
+    <p class="muted" style="cursor:pointer" onclick="authModal(${!reg})">${reg?'لدي حساب':'ليس لدي حساب؟ أنشئ واحداً'}</p>`;
+  $('m').style.display='flex';
+}
+async function login(reg){
+  const b={email:$('em').value,password:$('pw').value,...(reg&&{full_name:$('fn').value,phone:$('ph').value})};
+  const r=await api('/auth/'+(reg?'register':'login'),{method:'POST',body:JSON.stringify(b)});
+  S.token=r.token;S.user=r.user;localStorage.t=r.token;localStorage.u=JSON.stringify(r.user);
+  if(r.user.role!='customer')return location.href=r.user.role=='admin'?'/admin.html':'/panel.html';
+  $('m').style.display='none';ub();
+  if(S.view=='orders')orders();
+}
+function logout(){S.token=S.user=null;localStorage.removeItem('t');localStorage.removeItem('u');ub();home()}
+$('m').onclick=e=>e.target==$('m')&&($('m').style.display='none');
+ub();badge();home();
+</script>
+</body>
+</html>

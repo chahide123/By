@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>لوحة العمل</title>
+<link rel="stylesheet" href="staff.css">
+</head>
+<body>
+<header><h1>🛵 لوحة العمل (سائق / متجر)</h1><button onclick="logout()">خروج</button></header>
+<main id="app"></main>
+<script src="staff.js"></script>
+<script>
+gate(['courier', 'store_owner'], () => USER.role === 'courier' ? courier() : store());
+
+/* ================= السائق ================= */
+function courier() {
+  $('app').innerHTML = '<h2>طلباتي الجارية</h2><div id="mine" class="l"></div><h2>طلبات متاحة</h2><div id="av" class="l"></div>';
+  const NEXT = { picked_up: 'on_the_way', on_the_way: 'delivered' }, hidden = new Set();
+  let mine = [], last = 0;
+
+  window.act = async (id, st) => { await send(`/orders/${id}/status`, 'PATCH', { status: st }); load(); };
+  window.rej = async id => { await send(`/orders/${id}/reject`, 'POST'); hidden.add(id); load(); };
+
+  const info = o => `<div class="row"><b>${esc(o.store)}</b><span>${(+o.total).toFixed(2)} MAD</span></div>
+    <div class="muted">استلام: ${esc(o.pickup || o.pickup_address || '—')}</div>
+    <div class="muted">توصيل: ${esc(o.delivery_address)}</div>
+    ${o.description ? `<div>${esc(o.description)}</div>` : ''}`;
+
+  const load = async () => {
+    mine = await api('/courier/orders');
+    const av = await api('/orders/available');
+    $('mine').innerHTML = mine.map(o => { const n = NEXT[o.status] || 'picked_up'; return `<div class="card">${info(o)}
+      <div class="muted">الزبون: ${esc(o.customer)} • ${esc(o.phone)}</div>
+      <div class="row"><span class="b ${o.status}">${AR[o.status]}</span>
+      <button class="p" onclick="act('${o.id}','${n}')">${AR[n]}</button></div></div>`; }).join('')
+      || '<p class="muted">لا طلبات جارية</p>';
+    $('av').innerHTML = av.filter(o => !hidden.has(o.id)).map(o => `<div class="card">${info(o)}
+      <div class="row"><button onclick="rej('${o.id}')">رفض</button>
+      <button class="p" onclick="act('${o.id}','accepted')">قبول</button></div></div>`).join('')
+      || '<p class="muted">لا طلبات جديدة</p>';
+  };
+  load(); setInterval(() => load().catch(() => {}), 10000);
+
+  // إرسال الموقع كل 15 ثانية لكل طلب جارٍ (يعمل والصفحة مفتوحة)
+  if (navigator.geolocation) navigator.geolocation.watchPosition(p => {
+    if (Date.now() - last < 15000) return; last = Date.now();
+    mine.forEach(o => send(`/orders/${o.id}/tracking`, 'POST', { lat: p.coords.latitude, lng: p.coords.longitude }).catch(() => {}));
+  }, () => {}, { enableHighAccuracy: true });
+}
+
+/* ================= المتجر ================= */
+async function store() {
+  const ms = await api('/store/mine');
+  if (!ms.length) return $('app').innerHTML = '<p>لا يوجد متجر مرتبط بحسابك</p>';
+  $('app').innerHTML = `<div class="card">
+      <div class="row"><select id="sel">${ms.map(m => `<option value="${m.id}">${esc(m.name)}</option>`).join('')}</select><button id="op"></button></div>
+      <h3>إضافة منتج</h3>
+      <input id="pn" placeholder="اسم المنتج"><input id="pp" type="number" step="0.01" min="0" placeholder="السعر (MAD)">
+      <input id="pd" placeholder="الوصف (اختياري)"><button class="p" onclick="addP()">إضافة</button></div>
+    <h2>الطلبات الواردة</h2><div id="ol" class="l"></div>`;
+
+  const cur = () => ms.find(m => m.id === $('sel').value);
+  const paint = () => $('op').textContent = cur().is_open ? '🟢 مفتوح (اضغط للإغلاق)' : '🔴 مغلق (اضغط للفتح)';
+  $('sel').onchange = paint; paint();
+  $('op').onclick = async () => { const m = cur(); await send(`/stores/${m.id}/open`, 'PATCH', { is_open: !m.is_open }); m.is_open = !m.is_open; paint(); };
+
+  window.addP = async () => {
+    await send(`/stores/${$('sel').value}/products`, 'POST', { name: $('pn').value, price: $('pp').value, description: $('pd').value });
+    ['pn', 'pp', 'pd'].forEach(i => $(i).value = ''); alert('تمت الإضافة ✅');
+  };
+
+  const FLOW = { pending: [['accepted', 'قبول'], ['cancelled', 'رفض']], accepted: [['preparing', 'بدء التحضير']], preparing: [['ready', 'جاهز']] };
+  window.st = async (id, s) => { await send(`/orders/${id}/status`, 'PATCH', { status: s }); load(); };
+  const load = async () => {
+    const os = await api('/store/orders');
+    $('ol').innerHTML = os.map(o => `<div class="card"><div class="row"><b>#${esc(o.id.slice(0, 6))}</b><span class="b ${o.status}">${AR[o.status]}</span></div>
+      <div>${o.items.map(i => `${i.qty}× ${esc(i.name)}`).join('، ')}</div>
+      <div class="row"><span>${(+o.total).toFixed(2)} MAD</span><span>${(FLOW[o.status] || []).map(([s, l]) =>
+        `<button class="${s === 'cancelled' ? '' : 'p'}" onclick="st('${o.id}','${s}')">${l}</button>`).join(' ')}</span></div></div>`).join('')
+      || '<p class="muted">لا طلبات</p>';
+  };
+  load(); setInterval(() => load().catch(() => {}), 10000);
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>لوحة الإدارة</title>
+<link rel="stylesheet" href="staff.css">
+</head>
+<body>
+<header><h1>لوحة إدارة التوصيل</h1><button onclick="logout()">خروج</button></header>
+<main id="app"></main>
+<script src="staff.js"></script>
+<script>
+gate(['admin'], () => {
+  $('app').innerHTML = `
+    <section class="card"><h2>الطلبات النشطة (<span id="count">0</span>)</h2><div class="sc"><table>
+      <thead><tr><th>#</th><th>المتجر</th><th>الزبون</th><th>السائق</th><th>الحالة</th><th>المبلغ</th></tr></thead>
+      <tbody id="orders"></tbody></table></div></section>
+    <div class="grid2">
+      <section class="card"><h2>المتاجر</h2><table><tbody id="stores"></tbody></table></section>
+      <section class="card"><h2>السائقون</h2><table><tbody id="couriers"></tbody></table></section>
+    </div>`;
+  let stores = [], couriers = [];
+
+  const rl = (id, type, list) => $(id).innerHTML = list.map(x => `<tr><td>${esc(x.name)}</td>
+    <td><span class="b ${x.is_active ? 'on' : 'off'}">${x.is_active ? 'مفعّل' : 'معطّل'}</span></td>
+    <td><button onclick="tg('${type}','${x.id}')">${x.is_active ? 'تعطيل' : 'تفعيل'}</button></td></tr>`).join('');
+  const paint = () => { rl('stores', 'stores', stores); rl('couriers', 'couriers', couriers); };
+
+  window.tg = async (type, id) => {
+    const x = (type === 'stores' ? stores : couriers).find(i => i.id === id);
+    await send(`/admin/${type === 'stores' ? 'stores' : 'users'}/${id}`, 'PATCH', { is_active: !x.is_active });
+    x.is_active = !x.is_active; paint();
+  };
+
+  const orders = async () => {
+    const o = await api('/admin/orders/active');
+    $('count').textContent = o.length;
+    $('orders').innerHTML = o.map(x => `<tr><td>#${esc(x.id.slice(0, 6))}</td><td>${esc(x.store)}</td><td>${esc(x.customer)}</td>
+      <td>${esc(x.courier) || '—'}</td><td><span class="b ${esc(x.status)}">${AR[x.status] || esc(x.status)}</span></td>
+      <td>${(+x.total).toFixed(2)} MAD</td></tr>`).join('') || '<tr><td colspan="6">لا طلبات نشطة</td></tr>';
+  };
+
+  (async () => {
+    stores = await api('/admin/stores');
+    couriers = (await api('/admin/couriers')).map(c => ({ ...c, name: c.full_name }));
+    paint(); orders();
+  })();
+  setInterval(() => orders().catch(() => {}), 10000);
+});
+</script>
+</body>
+</html>
